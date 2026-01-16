@@ -142,6 +142,14 @@ do_htc_license_check (void)
   char **argv;
   struct pex_obj *pex;
   int err;
+  const char *skip_license = getenv ("HTC_SKIP_LICENSE_CHECK");
+
+  if (skip_license && skip_license[0] != '\0' && strcmp (skip_license, "0") != 0)
+    {
+      warning (0, "skipping htc license check (HTC_SKIP_LICENSE_CHECK=%s)",
+               skip_license);
+      return;
+    }
 
   srand (time (0));
 
@@ -174,5 +182,4 @@ do_htc_license_check (void)
   arguments_free (argv);
   pex_free (pex);
 }
-
 
