@@ -146,8 +146,8 @@ do_htc_license_check (void)
 
   if (skip_license && skip_license[0] != '\0' && strcmp (skip_license, "0") != 0)
     {
-      warning (0, "skipping htc license check (HTC_SKIP_LICENSE_CHECK=%s)",
-               skip_license);
+      inform (UNKNOWN_LOCATION, "skipping htc license check (HTC_SKIP_LICENSE_CHECK=%s)",
+              skip_license);
       return;
     }
 
