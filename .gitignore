@@ -1,0 +1,6 @@
+# Build output directories
+build/
+install/
+
+# Autoconf caches (regenerated during build)
+**/autom4te.cache/
