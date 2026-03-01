@@ -19,6 +19,19 @@ The build follows the standard cross-compiler bootstrap sequence:
 1. **Binutils** (assembler, linker, etc.)
 2. **Bootstrap GCC** (C compiler only, no libc)
 3. **Newlib** (C library, built with the bootstrap compiler)
+4. **Full GCC** (C + C++ compiler, libgcc, and libstdc++, built against newlib)
+
+## Quick Build
+
+A Makefile is provided that automates the entire build:
+
+```bash
+make tricore-toolchain
+```
+
+This handles all workarounds automatically and produces a complete C/C++
+toolchain in `./install/`. To start fresh: `make tricore-toolchain-clean`.
+3. **Newlib** (C library, built with the bootstrap compiler)
 4. **libgcc** (GCC runtime library, built against newlib headers)
 
 ## Prerequisites
@@ -102,11 +115,15 @@ export HTC_SKIP_LICENSE_CHECK=1
 ```
 
 This must be set for all build steps that invoke the cross-compiler (newlib,
-libgcc builds) and when using the compiler afterwards.
+libgcc, libstdc++ builds) and when using the compiler afterwards.
+
+Note: `--with-licenser=no` exists in `config.gcc` but is not wired into
+the `configure` script's argument parser, so it has no effect.
 
 ### 5. License Skip Warning Breaks `-Werror` Builds
 
-**Problem:** When `HTC_SKIP_LICENSE_CHECK` is set, the code originally emitted a
+**Problem:** When `HTC_SKIP_LICENSE_CHECK` is set (and the licenser is compiled
+in, i.e., `--with-licenser=no` was NOT used), the code originally emitted a
 `warning()` diagnostic. The TriCore target's Makefile (`gcc/gcc/config/tricore/t-tricore`)
 compiles `crt0.S` files with `-Werror`, causing this warning to be promoted to
 an error, failing the libgcc/crt0 build.
@@ -122,12 +139,14 @@ warning (0, "skipping htc license check ...");
 inform (UNKNOWN_LOCATION, "skipping htc license check ...");
 ```
 
+This fix is already committed in this repository.
+
 ## Build Instructions
 
 ### Setup
 
 ```bash
-# Set install prefix
+# Set install prefix and environment
 export PREFIX=$(pwd)/install
 export PATH="$PREFIX/bin:$PATH"
 export HTC_SKIP_LICENSE_CHECK=1
@@ -142,7 +161,7 @@ find binutils gcc newlib -type f \( \
 \) -exec chmod +x {} +
 
 # Create out-of-tree build directories
-mkdir -p build/{binutils,gcc-bootstrap,newlib}
+mkdir -p build/{binutils,gcc-bootstrap,gcc-full,newlib}
 ```
 
 ### Step 1: Build Binutils
@@ -189,22 +208,57 @@ cd ../..
 
 ```bash
 cd build/newlib
+HTC_SKIP_LICENSE_CHECK=1 \
 ../../newlib/configure \
     --target=tricore \
     --prefix=$PREFIX \
     --disable-newlib-supplied-syscalls \
+    --enable-newlib-elix-level=3 \
+    --enable-newlib-io-long-long \
     CFLAGS_FOR_TARGET="-g -O2 -ffunction-sections"
-make -j$(nproc)
-make install
+HTC_SKIP_LICENSE_CHECK=1 make -j$(nproc)
+HTC_SKIP_LICENSE_CHECK=1 make install
 cd ../..
 ```
 
-### Step 4: Build libgcc
+Note: `HTC_SKIP_LICENSE_CHECK=1` is needed for newlib because it uses the
+bootstrap compiler which was built with `--with-licenser=no` but the newlib
+build invokes the compiler in a context where the licenser might still be
+checked at runtime.
+
+### Step 4: Build Full GCC (C + C++)
 
 ```bash
-cd build/gcc-bootstrap
+cd build/gcc-full
+../../gcc/configure \
+    --target=tricore \
+    --prefix=$PREFIX \
+    --enable-languages=c,c++ \
+    --with-headers=yes \
+    --with-newlib=yes \
+    --enable-c99 \
+    --enable-long-long \
+    --enable-checking \
+    --enable-static \
+    --disable-shared \
+    --disable-threads \
+    --disable-libssp \
+    --disable-libgomp \
+    --disable-libmudflap \
+    --disable-nls \
+    --disable-werror \
+    --enable-newlib-elix-level=3 \
+    --enable-newlib-io-long-long \
+    --disable-newlib-supplied-syscalls \
+    --disable-libstdcxx-pch \
+    CFLAGS="-fcommon -g -O2" \
+    CXXFLAGS="-fcommon -g -O2 -std=gnu++14"
+make -j$(nproc) all-gcc
 make -j$(nproc) all-target-libgcc
+make -j$(nproc) all-target-libstdc++-v3
+make install-gcc
 make install-target-libgcc
+make install-target-libstdc++-v3
 cd ../..
 ```
 
@@ -214,11 +268,16 @@ cd ../..
 tricore-gcc --version
 # Should output: tricore-gcc (cosmocomp Release GCC) 4.9.4
 
-# Test compilation:
+# Test C compilation:
 echo 'int main(void) { return 0; }' > /tmp/test.c
 tricore-gcc -c /tmp/test.c -o /tmp/test.o -mcpu=tc27xx
 tricore-objdump -d /tmp/test.o
 # Should show TriCore assembly instructions (mov.aa, ret, etc.)
+
+# Test C++ compilation:
+echo 'class A { int x; public: A(int v):x(v){} int get(){return x;} }; int main(){A a(1);return a.get();}' > /tmp/test.cpp
+tricore-g++ -O2 -c /tmp/test.cpp -o /tmp/test.o -mcpu=tc27xx
+tricore-objdump -d /tmp/test.o
 ```
 
 Note: Linking a full ELF binary requires a memory-map linker script specific to
@@ -229,10 +288,10 @@ not by this toolchain.
 
 After a successful build, `$PREFIX/` contains:
 
-- `bin/` — Cross-tools: `tricore-gcc`, `tricore-as`, `tricore-ld`, `tricore-objdump`, etc.
+- `bin/` — Cross-tools: `tricore-gcc`, `tricore-g++`, `tricore-as`, `tricore-ld`, `tricore-objdump`, etc.
 - `lib/gcc/tricore/4.9.4/` — Compiler internals, libgcc, crt0 objects for all multilib variants
-- `tricore/lib/` — Newlib libraries (libc.a, libm.a, libg.a, libos.a)
-- `tricore/include/` — Newlib C headers
+- `tricore/lib/` — Newlib (libc.a, libm.a) and C++ libraries (libstdc++.a, libsupc++.a)
+- `tricore/include/` — Newlib C headers and C++ standard library headers
 
 Multilib variants are built for: default, tc131, tc16, tc161, tc162, each with
 an optional short-double variant.
